@@ -1,0 +1,537 @@
+import pygame
+import sys
+import os
+import random
+
+
+class FruitNinjaGame:
+    def __init__(self):
+        pygame.init()
+        pygame.mixer.init()  # 初始化音频模块
+        self.WIDTH, self.HEIGHT = 800, 500
+        self.FPS = 12
+        self.game_display = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
+        pygame.display.set_caption('Fruit Ninja Game')
+        self.clock = pygame.time.Clock()
+
+        # 游戏状态变量
+        self.player_lives = 3
+        self.score = 0
+        self.high_score = 0
+        self.game_over = True
+        self.first_round = True
+        self.fruits = ['melon', 'orange', 'pomegranate', 'guava', 'bomb']
+
+        # 新增：游戏模式
+        self.game_mode = "relax"  # 默认放松模式
+        self.speed_increase_factor = 0.02  # 竞速模式速度增长因子
+        self.max_speed_multiplier = 2.0  # 最大速度倍数限制
+
+        # 新增：速度控制变量
+        self.speed_multiplier = 1.0  # 速度乘数
+        self.current_speed_display = 100  # 显示用的速度百分比
+
+        # 新增：掉落水果计数
+        self.fruits_dropped = 0
+
+        # 轨迹和碰撞检测优化
+        self.mouse_trail = []  # 存储鼠标轨迹点
+        self.trail_color = (255, 255, 255)  # 轨迹颜色（白色）
+        self.max_trail_length = 15  # 最大轨迹长度
+        self.trail_fade = 0.85  # 轨迹渐隐系数（增加淡出速度，原为0.92）
+        self.collision_threshold = 20  # 碰撞检测扩展像素
+        self.last_mouse_pos = None  # 上一帧鼠标位置
+        self.mouse_pressed = False  # 鼠标是否按下
+
+        # 加载游戏资源
+        self.load_resources()
+
+        # 初始化字体
+        pygame.font.init()
+        self.font = pygame.font.SysFont(None, 42)  # 使用系统默认字体
+        self.large_font = pygame.font.SysFont(None, 90)  # 大字体用于标题
+        self.small_font = pygame.font.SysFont(None, 28)
+
+        # 加载最高分
+        self.load_high_score()
+
+        # 水果数据字典
+        self.data = {}
+
+        # 边界控制参数
+        self.HORIZONTAL_MARGIN = 100  # 水平边距
+        self.VERTICAL_MARGIN = 50  # 垂直边距
+        self.MIN_VERTICAL_SPEED = -40  # 最小垂直速度（更负 = 更快向上）
+        self.MAX_VERTICAL_SPEED = -25  # 最大垂直速度（更负 = 更快向上）
+        self.MIN_HORIZONTAL_SPEED = -7  # 最小水平速度
+        self.MAX_HORIZONTAL_SPEED = 7  # 最大水平速度
+        self.BOUNCE_DAMPING = 0.7  # 反弹阻尼系数
+        self.MIN_HEIGHT_RATIO = 0.25  # 最小飞行高度比例（屏幕的1/4）
+
+        # 初始化水果
+        for fruit in self.fruits:
+            self.generate_random_fruit(fruit)
+
+        # 创建按钮
+        self.button_width = 200
+        self.button_height = 50
+        # 调整按钮位置，下移
+        self.restart_button = pygame.Rect((self.WIDTH - self.button_width) // 2, self.HEIGHT // 2 + 80,
+                                          self.button_width, self.button_height)
+        self.quit_button = pygame.Rect((self.WIDTH - self.button_width) // 2, self.HEIGHT // 2 + 150, self.button_width,
+                                       self.button_height)
+
+        # 新增：模式选择按钮
+        self.mode_button = pygame.Rect(650, 90, 140, 40)
+
+    def load_resources(self):
+        """加载游戏所需的所有资源（包括音频）"""
+        try:
+            # 获取脚本所在目录
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            sound_dir = os.path.join(script_dir, "sound")
+            images_dir = os.path.join(script_dir, "images")
+
+            # 加载图片资源
+            self.background = pygame.image.load(os.path.join(script_dir, 'back.jpg'))
+            self.lives_icon = pygame.image.load(os.path.join(images_dir, 'white_lives.png'))
+            self.explosion_img = pygame.image.load(os.path.join(images_dir, 'explosion.png'))
+
+            # 预加载水果图片
+            self.fruit_images = {}
+            self.half_fruit_images = {}
+            for fruit in self.fruits:
+                if fruit != 'bomb':
+                    self.half_fruit_images[fruit] = pygame.image.load(os.path.join(images_dir, f"half_{fruit}.png"))
+                self.fruit_images[fruit] = pygame.image.load(os.path.join(images_dir, f"{fruit}.png"))
+
+            # 加载生命图标
+            self.lives_images = {
+                'red': pygame.image.load(os.path.join(images_dir, 'red_lives.png')),
+                'white': pygame.image.load(os.path.join(images_dir, 'white_lives.png'))
+            }
+
+            # 加载音频资源
+            bgm_path = os.path.join(sound_dir, "Halfbrick - Welcome, Fruit Ninja.wav")
+            cut_fruit_path = os.path.join(sound_dir, "切水果.wav")
+            bomb_explode_path = os.path.join(sound_dir, "爆炸声.wav")
+            life_lost_path = os.path.join(sound_dir, "miss声.wav")  # 修改为正确的音效文件路径
+
+            # 加载并播放BGM（循环）
+            pygame.mixer.music.load(bgm_path)
+            pygame.mixer.music.play(-1)
+
+            # 加载音效
+            self.cut_fruit_sound = pygame.mixer.Sound(cut_fruit_path)
+            self.bomb_explode_sound = pygame.mixer.Sound(bomb_explode_path)
+            self.life_lost_sound = pygame.mixer.Sound(life_lost_path)  # 使用正确的音效文件
+
+        except FileNotFoundError as e:
+            print(f"文件未找到: {e}")
+            print("请确保所有文件存在于正确目录")
+            sys.exit(1)
+        except pygame.error as e:
+            print(f"音频加载错误: {e}")
+            print("尝试以下操作:")
+            print("1. 确认音频文件格式为WAV")
+            print("2. 检查文件是否损坏")
+            # 继续游戏而不使用音频
+            self.cut_fruit_sound = None
+            self.bomb_explode_sound = None
+            self.life_lost_sound = None  # 新增
+
+    def load_high_score(self):
+        """从文件加载最高分"""
+        try:
+            if os.path.exists('high_score.txt'):
+                with open('high_score.txt', 'r') as f:
+                    self.high_score = int(f.read().strip())
+            else:
+                self.high_score = 0
+        except:
+            self.high_score = 0
+
+    def save_high_score(self):
+        """保存最高分"""
+        if self.score > self.high_score:
+            self.high_score = self.score
+            try:
+                with open('high_score.txt', 'w') as f:
+                    f.write(str(self.high_score))
+            except:
+                print("Failed to save high score")
+
+    def generate_random_fruit(self, fruit):
+        """生成随机水果对象"""
+        img = self.fruit_images[fruit]
+        rect = img.get_rect()
+
+        # 确保水果从屏幕底部出现，且不会水平飞出屏幕
+        x = random.randint(self.HORIZONTAL_MARGIN, self.WIDTH - self.HORIZONTAL_MARGIN)
+
+        # 调整水平速度，确保水果不会水平飞出屏幕
+        min_distance = 1
+        time_to_left = (x - self.HORIZONTAL_MARGIN) / abs(self.MIN_HORIZONTAL_SPEED) if (
+                                                                                                x - self.HORIZONTAL_MARGIN) > min_distance else 1
+        time_to_right = (self.WIDTH - self.HORIZONTAL_MARGIN - x) / abs(self.MAX_HORIZONTAL_SPEED) if (
+                                                                                                              self.WIDTH - self.HORIZONTAL_MARGIN - x) > min_distance else 1
+
+        time_to_edge = min(time_to_left, time_to_right)
+
+        max_horizontal_speed = (x - self.HORIZONTAL_MARGIN) / time_to_edge if x > self.WIDTH / 2 else \
+            (self.WIDTH - self.HORIZONTAL_MARGIN - x) / time_to_edge
+        speed_x = random.randint(
+            max(self.MIN_HORIZONTAL_SPEED, -int(max_horizontal_speed)),
+            min(self.MAX_HORIZONTAL_SPEED, int(max_horizontal_speed))
+        )
+
+        # 垂直速度 - 确保水果至少飞到屏幕1/4高度
+        min_height = self.HEIGHT * self.MIN_HEIGHT_RATIO
+        max_height = self.HEIGHT - self.VERTICAL_MARGIN
+
+        # 计算到达最低高度和最高高度所需的速度
+        min_vertical_speed = -int((2 * 0.8 * min_height) ** 0.5)
+        max_vertical_speed = -int((2 * 0.8 * max_height) ** 0.5)
+
+        # 确保速度范围有效
+        lower_bound = max(self.MIN_VERTICAL_SPEED, max_vertical_speed)
+        upper_bound = min(self.MAX_VERTICAL_SPEED, min_vertical_speed)
+
+        # 如果范围无效，调整为合理值
+        if lower_bound > upper_bound:
+            avg_speed = (self.MIN_VERTICAL_SPEED + self.MAX_VERTICAL_SPEED) // 2
+            lower_bound = avg_speed - 5  # 确保有一个小范围
+            upper_bound = avg_speed
+
+        # 随机选择一个合适的速度
+        speed_y = random.randint(lower_bound, upper_bound)
+
+        # 应用速度乘数（竞速模式下会增加）
+        speed_x *= self.speed_multiplier
+        speed_y *= self.speed_multiplier
+
+        # 设置水果初始属性
+        self.data[fruit] = {
+            'img': img,
+            'rect': rect,
+            'x': x,
+            'y': self.HEIGHT + 20,
+            'speed_x': speed_x,
+            'speed_y': speed_y,
+            'throw': random.random() > 0.7,  # 70%概率抛出水果
+            't': 0,  # 物理时间参数
+            'hit': False,  # 是否被击中
+            'is_bomb': fruit == 'bomb',  # 是否为炸弹
+            'dropped': False  # 新增：是否已掉落
+        }
+
+    def draw_text(self, text, size, x, y, color=(255, 255, 255)):
+        """在屏幕上绘制文本"""
+        font = pygame.font.SysFont(None, size)
+        text_surface = font.render(text, True, color)
+        text_rect = text_surface.get_rect()
+        text_rect.midtop = (x, y)
+        self.game_display.blit(text_surface, text_rect)
+
+    def draw_lives(self, x, y):
+        """绘制剩余生命图标"""
+        for i in range(3):
+            img = self.lives_images['red'] if i < self.player_lives else self.lives_images['white']
+            img_rect = img.get_rect()
+            img_rect.x = x + 35 * i
+            img_rect.y = y
+            self.game_display.blit(img, img_rect)
+
+    def draw_mouse_trail(self):
+        """绘制鼠标滑动轨迹"""
+        if len(self.mouse_trail) > 1:
+            for i in range(len(self.mouse_trail) - 1):
+                # 计算渐隐颜色（从白色到透明）
+                alpha = (i + 1) / len(self.mouse_trail)
+                color = (
+                    int(self.trail_color[0] * alpha),
+                    int(self.trail_color[1] * alpha),
+                    int(self.trail_color[2] * alpha)
+                )
+                # 绘制轨迹线段
+                pygame.draw.line(self.game_display, color,
+                                 self.mouse_trail[i], self.mouse_trail[i + 1],
+                                 width=6)  # 轨迹宽度
+
+    def show_game_over_screen(self):
+        """显示游戏开始/结束界面"""
+        self.game_display.blit(self.background, (0, 0))
+
+        if self.game_over and not self.first_round:
+            # 游戏结束界面 - 调整文字位置上移
+            self.draw_text("GAME OVER!", 90, self.WIDTH / 2, self.HEIGHT / 4 - 30)
+            self.draw_text(f"Final Score: {self.score}", 50, self.WIDTH / 2, self.HEIGHT / 2 - 60)
+            self.draw_text(f"High Score: {self.high_score}", 40, self.WIDTH / 2, self.HEIGHT / 2 - 10)
+
+            # 显示当前游戏模式
+            mode_text = "Relax Mode" if self.game_mode == "relax" else "Race Mode"
+            self.draw_text(f"Mode: {mode_text}", 40, self.WIDTH / 2, self.HEIGHT / 2 + 40)
+
+            # 绘制按钮 - 位置下移
+            pygame.draw.rect(self.game_display, (0, 200, 0), self.restart_button)
+            pygame.draw.rect(self.game_display, (200, 0, 0), self.quit_button)
+            self.draw_text("RESTART", 36, self.restart_button.centerx, self.restart_button.centery - 15)
+            self.draw_text("QUIT", 36, self.quit_button.centerx, self.quit_button.centery - 15)
+        else:
+            # 游戏首次启动界面
+            self.draw_text("FRUIT NINJA", 90, self.WIDTH / 2, self.HEIGHT / 4)
+            self.draw_text(f"High Score: {self.high_score}", 40, self.WIDTH / 2, self.HEIGHT / 2)
+            self.draw_text("PRESS ANY KEY TO START", 42, self.WIDTH / 2, self.HEIGHT * 3 / 4)
+
+            # 显示游戏模式说明
+            self.draw_text("Press 'M' to switch mode", 28, self.WIDTH / 2, self.HEIGHT * 3 / 4 + 50)
+
+        pygame.display.flip()
+
+        # 等待用户操作
+        waiting = True
+        while waiting:
+            self.clock.tick(self.FPS)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.KEYUP:
+                    if self.game_over:
+                        waiting = False
+                    else:
+                        self.first_round = False
+                        waiting = False
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if self.game_over:
+                        # 检查按钮点击
+                        if self.restart_button.collidepoint(event.pos):
+                            waiting = False
+                        elif self.quit_button.collidepoint(event.pos):
+                            pygame.quit()
+                            sys.exit()
+
+    def process_fruits(self):
+        """处理所有水果的移动和碰撞检测"""
+        mouse_pos = pygame.mouse.get_pos()
+
+        # 更新鼠标轨迹
+        if self.mouse_pressed:
+            self.mouse_trail.append(mouse_pos)
+            # 限制轨迹长度
+            if len(self.mouse_trail) > self.max_trail_length:
+                self.mouse_trail.pop(0)
+        else:
+            self.mouse_trail = []  # 鼠标释放时清空轨迹
+
+        # 碰撞检测（考虑当前帧和上一帧的鼠标位置）
+        if self.last_mouse_pos:
+            for fruit, data in self.data.items():
+                if data['throw'] and not data['hit']:
+                    # 扩展碰撞框（增加检测范围）
+                    expanded_rect = data['rect'].inflate(self.collision_threshold, self.collision_threshold)
+
+                    # 检测当前帧或上一帧的鼠标位置是否碰撞
+                    if (expanded_rect.collidepoint(mouse_pos) or
+                            expanded_rect.collidepoint(self.last_mouse_pos)):
+                        self.handle_fruit_hit(fruit, data)
+
+        self.last_mouse_pos = mouse_pos  # 更新上一帧鼠标位置
+
+        # 处理水果移动
+        for fruit, data in self.data.items():
+            if data['throw']:
+                # 更新水果位置
+                data['x'] += data['speed_x']
+                data['y'] += data['speed_y']
+                data['speed_y'] += 0.8 * self.speed_multiplier  # 重力加速度，应用速度乘数
+
+                # 边界检查 - 防止水果飞出屏幕
+                # 水平边界检查
+                if data['x'] <= self.HORIZONTAL_MARGIN and data['speed_x'] < 0:
+                    data['x'] = self.HORIZONTAL_MARGIN
+                    data['speed_x'] = -data['speed_x'] * self.BOUNCE_DAMPING
+
+                elif data['x'] >= self.WIDTH - self.HORIZONTAL_MARGIN and data['speed_x'] > 0:
+                    data['x'] = self.WIDTH - self.HORIZONTAL_MARGIN
+                    data['speed_x'] = -data['speed_x'] * self.BOUNCE_DAMPING
+
+                # 垂直边界检查
+                if data['y'] <= self.VERTICAL_MARGIN and data['speed_y'] < 0:
+                    data['y'] = self.VERTICAL_MARGIN
+                    data['speed_y'] = -data['speed_y'] * self.BOUNCE_DAMPING
+
+                # 更新碰撞矩形位置
+                data['rect'].x = data['x']
+                data['rect'].y = data['y']
+
+                # 绘制水果
+                if 0 <= data['y'] <= self.HEIGHT:
+                    self.game_display.blit(data['img'], (data['x'], data['y']))
+
+                # 如果水果飞出屏幕底部，检查是否扣除生命值
+                if data['y'] > self.HEIGHT:
+                    # 未被切开的水果掉落扣除生命值
+                    if not data['hit'] and not data['dropped']:
+                        data['dropped'] = True
+                        self.handle_fruit_dropped(fruit, data)
+                    self.generate_random_fruit(fruit)
+            else:
+                # 如果水果未被抛出，重新生成
+                self.generate_random_fruit(fruit)
+
+        # 新增：竞速模式下逐渐增加速度
+        if self.game_mode == "race" and self.speed_multiplier < self.max_speed_multiplier:
+            self.speed_multiplier += self.speed_increase_factor * (self.FPS / 60)
+            self.current_speed_display = int(self.speed_multiplier * 100)
+
+    def handle_fruit_hit(self, fruit, data):
+        """处理水果被击中的情况"""
+        if not data['hit']:  # 防止重复切割
+            data['hit'] = True
+
+            if data['is_bomb']:
+                # 播放炸弹爆炸音效
+                if self.bomb_explode_sound:
+                    self.bomb_explode_sound.play()
+                self.player_lives -= 1
+                data['img'] = self.explosion_img
+
+                # 检查游戏是否结束
+                if self.player_lives < 0:
+                    self.game_over = True
+            else:
+                # 播放切水果音效
+                if self.cut_fruit_sound:
+                    self.cut_fruit_sound.play()
+                data['img'] = self.half_fruit_images[fruit]
+                self.score += 1
+                # 增加切割后水果的速度，使其快速飞出屏幕
+                data['speed_y'] = -5 * self.speed_multiplier  # 应用速度乘数
+
+            # 更新分数显示
+            self.score_text = self.font.render(f'Score: {self.score}', True, (255, 255, 255))
+
+    def handle_fruit_dropped(self, fruit, data):
+        """处理水果掉落的情况"""
+        if not data['is_bomb']:  # 炸弹掉落不额外扣分
+            self.fruits_dropped += 1
+            self.player_lives -= 1
+
+            # 播放生命丢失音效
+            if self.life_lost_sound:
+                self.life_lost_sound.play()
+
+            # 显示掉落提示
+            drop_text = self.small_font.render(f"Fruit Dropped! (-1 life)", True, (255, 0, 0))
+            self.game_display.blit(drop_text, (self.WIDTH // 2 - drop_text.get_width() // 2, 100))
+
+            # 检查游戏是否结束
+            if self.player_lives < 0:
+                self.game_over = True
+
+    def switch_game_mode(self):
+        """切换游戏模式"""
+        self.game_mode = "race" if self.game_mode == "relax" else "relax"
+        self.speed_multiplier = 1.0  # 重置速度乘数
+        self.current_speed_display = 100
+
+        # 重新生成所有水果以应用新的速度
+        for fruit in self.fruits:
+            self.generate_random_fruit(fruit)
+
+    def reset_game(self):
+        """重置游戏状态"""
+        self.player_lives = 3
+        self.score = 0
+        self.score_text = self.font.render(f'Score: {self.score}', True, (255, 255, 255))
+        self.data = {}
+        self.mouse_trail = []
+        self.last_mouse_pos = None
+        self.fruits_dropped = 0  # 重置掉落计数
+        self.speed_multiplier = 1.0  # 重置速度乘数
+        self.current_speed_display = 100  # 重置显示速度
+
+        for fruit in self.fruits:
+            self.generate_random_fruit(fruit)
+
+    def run(self):
+        """游戏主循环"""
+        self.score_text = self.font.render(f'Score: {self.score}', True, (255, 255, 255))
+
+        try:
+            while True:
+                # 处理事件
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        pygame.quit()
+                        return
+                    elif event.type == pygame.MOUSEBUTTONDOWN:
+                        if event.button == 1:  # 左键
+                            self.mouse_pressed = True
+
+                            # 检查模式切换按钮点击
+                            if self.mode_button.collidepoint(event.pos):
+                                self.switch_game_mode()
+                    elif event.type == pygame.MOUSEBUTTONUP:
+                        if event.button == 1:  # 左键
+                            self.mouse_pressed = False
+                    elif event.type == pygame.KEYDOWN:
+                        # 新增：键盘切换模式
+                        if event.key == pygame.K_m:
+                            self.switch_game_mode()
+
+                if self.game_over:
+                    if self.first_round:
+                        self.show_game_over_screen()
+                        self.first_round = False
+                    else:
+                        # 保存最高分
+                        self.save_high_score()
+                        self.show_game_over_screen()
+                    self.reset_game()
+                    self.game_over = False
+
+                # 绘制背景和UI
+                self.game_display.blit(self.background, (0, 0))
+                self.game_display.blit(self.score_text, (10, 10))
+
+                # 保持生命显示在最右上角
+                self.draw_lives(690, 10)
+
+                # 新增：显示当前游戏模式（位置下移，避免与生命显示重叠）
+                mode_text = "Relax Mode" if self.game_mode == "relax" else f"Race Mode ({self.current_speed_display}%)"
+                mode_color = (0, 255, 0) if self.game_mode == "relax" else (255, 100, 0)
+                self.draw_text(mode_text, 30, 720, 50, mode_color)
+
+                # 新增：绘制模式切换按钮（位置下移）
+                pygame.draw.rect(self.game_display, (100, 100, 100), self.mode_button)
+                pygame.draw.rect(self.game_display, (200, 200, 200), self.mode_button, 2)  # 边框
+                self.draw_text("Switch Mode", 24, self.mode_button.centerx, self.mode_button.centery - 12)
+
+                # 新增：显示掉落水果数量（位置下移）
+                drops_text = self.small_font.render(f"Dropped: {self.fruits_dropped}", True, (255, 255, 255))
+                self.game_display.blit(drops_text, (10, 50))
+
+                # 处理水果逻辑
+                self.process_fruits()
+
+                # 绘制鼠标轨迹
+                self.draw_mouse_trail()
+
+                # 检查游戏是否结束
+                if self.player_lives < 0:
+                    pygame.time.delay(1000)  # 延迟1秒显示结果
+                    self.game_over = True
+
+                # 更新屏幕
+                pygame.display.update()
+                self.clock.tick(self.FPS)
+        finally:
+            # 确保游戏退出时保存最高分
+            self.save_high_score()
+
+
+if __name__ == "__main__":
+    game = FruitNinjaGame()
+    game.run()
